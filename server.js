@@ -22,20 +22,28 @@ app.use(session({
 }));
 
 /* -----------------------------
-   IN-MEMORY DATA (Level 2)
-   (we will replace with DB later)
+   IN-MEMORY DATA (MVP ONLY)
 ------------------------------*/
 let transactions = [];
 
 /* -----------------------------
-   BASIC TEST ROUTE
+   OAUTH CLIENT
+------------------------------*/
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+/* -----------------------------
+   BASIC ROUTE
 ------------------------------*/
 app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
 });
 
 /* -----------------------------
-   TRANSACTIONS API
+   TRANSACTIONS (manual test)
 ------------------------------*/
 app.get("/transactions", (req, res) => {
   res.json(transactions);
@@ -58,16 +66,7 @@ app.post("/transactions", (req, res) => {
 });
 
 /* -----------------------------
-   OAUTH SETUP (GOOGLE)
-------------------------------*/
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
-
-/* -----------------------------
-   GOOGLE LOGIN ROUTE
+   GOOGLE LOGIN
 ------------------------------*/
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
@@ -83,7 +82,7 @@ app.get("/auth/google", (req, res) => {
 });
 
 /* -----------------------------
-   GOOGLE CALLBACK ROUTE
+   GOOGLE CALLBACK
 ------------------------------*/
 app.get("/auth/google/callback", async (req, res) => {
   try {
@@ -102,7 +101,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   CHECK AUTH STATUS (DEBUG)
+   AUTH STATUS DEBUG
 ------------------------------*/
 app.get("/auth/status", (req, res) => {
   res.json({
@@ -111,14 +110,8 @@ app.get("/auth/status", (req, res) => {
 });
 
 /* -----------------------------
-   START SERVER
+   TEST GMAIL ACCESS
 ------------------------------*/
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
 app.get("/test-gmail", async (req, res) => {
   try {
     if (!req.session.tokens) {
@@ -141,6 +134,9 @@ app.get("/test-gmail", async (req, res) => {
   }
 });
 
+/* -----------------------------
+   FETCH + PARSE EMAILS
+------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
     if (!req.session.tokens) {
@@ -173,8 +169,8 @@ app.get("/fetch-emails", async (req, res) => {
       if (parsed) {
         results.push({
           id: msg.id,
-          ...parsed,
-          raw: text
+          raw: text,
+          ...parsed
         });
       }
     }
@@ -187,45 +183,59 @@ app.get("/fetch-emails", async (req, res) => {
   }
 });
 
+/* -----------------------------
+   TRANSACTION PARSER
+------------------------------*/
 function parseTransaction(text) {
   const lower = text.toLowerCase();
 
-  // Only process transaction emails
-  if (!lower.includes("transaction alert")) {
-    return null;
-  }
+  // better filtering (broader coverage)
+  const isTransactionEmail =
+    lower.includes("transaction") ||
+    lower.includes("alert") ||
+    lower.includes("deposit") ||
+    lower.includes("payment") ||
+    lower.includes("purchase");
 
-  // Extract fields using regex
+  if (!isTransactionEmail) return null;
+
   const merchantMatch = text.match(/merchant:\s*(.*)/i);
   const dateMatch = text.match(/date:\s*(.*)/i);
-  const amountMatch = text.match(/amount:\s*\$?([0-9]+(\.[0-9]{1,2})?)/i);
+  const amountMatch = text.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
 
-  if (!merchantMatch || !amountMatch) {
-    return null;
-  }
+  if (!merchantMatch || !amountMatch) return null;
 
   const merchant = merchantMatch[1].trim();
 
-  const amount = parseFloat(amountMatch[1]);
+  const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
 
   const date = dateMatch ? new Date(dateMatch[1].trim()) : new Date();
 
+  const isIncome =
+    lower.includes("deposit") ||
+    lower.includes("payroll") ||
+    lower.includes("refund");
+
+  const signedAmount = isIncome
+    ? Math.abs(amount)
+    : -Math.abs(amount);
+
   return {
     merchant,
-    amount: -Math.abs(amount), // credit card = always expense
+    amount: signedAmount,
     category: categorizeMerchant(merchant),
-    type: "expense",
+    type: isIncome ? "income" : "expense",
     date: date.toISOString()
   };
 }
 
+/* -----------------------------
+   CATEGORY ENGINE
+------------------------------*/
 function categorizeMerchant(merchant) {
   const m = merchant.toLowerCase();
-
-  // normalize noise
   const clean = m.replace(/[^a-z0-9 ]/g, " ");
 
-  // GAS category (important upgrade)
   if (
     clean.includes("gas") ||
     clean.includes("fuel") ||
@@ -265,3 +275,12 @@ function categorizeMerchant(merchant) {
 
   return "other";
 }
+
+/* -----------------------------
+   START SERVER (MUST BE LAST)
+------------------------------*/
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
