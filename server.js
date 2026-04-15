@@ -84,7 +84,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   FETCH EMAILS (STRUCTURE DEBUG MODE)
+   FETCH EMAILS (SNIPPET-FIRST)
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -112,21 +112,20 @@ app.get("/fetch-emails", async (req, res) => {
           id: msg.id
         });
 
-        const payload = full.data.payload;
+        const snippet = full.data.snippet || "";
+
+        // optional fallback (only if needed later)
+        const body = extractBody(full.data.payload);
 
         results.push({
           id: msg.id,
 
-          // Gmail metadata
-          snippet: full.data.snippet,
-          mimeType: payload?.mimeType || null,
+          // PRIMARY SOURCE (THIS IS WHAT WE USE NOW)
+          text: snippet,
 
-          // structure inspection
-          hasBody: !!payload?.body?.data,
-          hasParts: !!payload?.parts,
-
-          // decoded body (if any exists)
-          decoded: extractBody(payload)
+          // DEBUG INFO
+          bodyFallback: body,
+          hasSnippet: !!snippet
         });
 
       } catch (innerErr) {
@@ -147,17 +146,15 @@ app.get("/fetch-emails", async (req, res) => {
 });
 
 /* -----------------------------
-   EMAIL BODY EXTRACTOR (DEBUG VERSION)
+   BODY EXTRACTOR (KEEP FOR LATER)
 ------------------------------*/
 function extractBody(payload) {
   let bodyData = "";
 
-  // Case 1: simple email body
   if (payload?.body?.data) {
     bodyData = payload.body.data;
   }
 
-  // Case 2: multipart emails (VERY COMMON)
   else if (payload?.parts) {
     for (const part of payload.parts) {
       if (part.mimeType === "text/plain" && part.body?.data) {
