@@ -198,19 +198,34 @@ app.get("/fetch-emails", async (req, res) => {
 function parseTransaction(text) {
   const lower = text.toLowerCase();
 
-  // extract ANY dollar amount
-  const amountMatch = text.match(/\$([\d,]+(\.\d{1,2})?)/);
+  // normalize HTML + weird Gmail encoding
+  const cleanText = text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/=09/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ");
+
+  // extract amount (safe)
+  const amountMatch = cleanText.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
   if (!amountMatch) return null;
 
   const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
 
-  // merchant guess (very flexible)
+  // extract merchant (NOW LINE BASED = MUCH MORE RELIABLE)
   let merchant = "unknown";
 
-  const atMatch = text.match(/at ([a-zA-Z0-9 &]+)/i);
-  if (atMatch) merchant = atMatch[1].trim();
+  const merchantMatch = cleanText.match(/merchant:\s*([^\n]+)/i);
+  if (merchantMatch) {
+    merchant = merchantMatch[1].trim();
+  }
 
-  // detect income vs expense
+  // extract date safely
+  const dateMatch = cleanText.match(/date:\s*([^\n]+)/i);
+  const date = dateMatch
+    ? new Date(dateMatch[1].trim())
+    : new Date();
+
+  // income detection
   const isIncome =
     lower.includes("deposit") ||
     lower.includes("payroll") ||
@@ -221,7 +236,7 @@ function parseTransaction(text) {
     amount: isIncome ? amount : -amount,
     type: isIncome ? "income" : "expense",
     category: categorizeMerchant(merchant),
-    date: new Date().toISOString()
+    date: date.toISOString()
   };
 }
 
