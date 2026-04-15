@@ -118,3 +118,25 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+app.get("/test-gmail", async (req, res) => {
+  try {
+    if (!req.session.tokens) {
+      return res.status(401).json({ error: "Not logged in" });
+    }
+
+    oauth2Client.setCredentials(req.session.tokens);
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+    const response = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 5
+    });
+
+    res.json(response.data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Gmail fetch failed" });
+  }
+});
