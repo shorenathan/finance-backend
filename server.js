@@ -198,40 +198,30 @@ app.get("/fetch-emails", async (req, res) => {
 function parseTransaction(text) {
   const lower = text.toLowerCase();
 
-  const isTransactionEmail =
-    lower.includes("transaction") ||
-    lower.includes("alert") ||
-    lower.includes("deposit") ||
-    lower.includes("payment") ||
-    lower.includes("purchase");
+  // extract ANY dollar amount
+  const amountMatch = text.match(/\$([\d,]+(\.\d{1,2})?)/);
+  if (!amountMatch) return null;
 
-  if (!isTransactionEmail) return null;
-
-  const merchantMatch = text.match(/merchant:\s*(.*)/i);
-  const dateMatch = text.match(/date:\s*(.*)/i);
-  const amountMatch = text.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
-
-  if (!merchantMatch || !amountMatch) return null;
-
-  const merchant = merchantMatch[1].trim();
   const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
-  const date = dateMatch ? new Date(dateMatch[1].trim()) : new Date();
 
+  // merchant guess (very flexible)
+  let merchant = "unknown";
+
+  const atMatch = text.match(/at ([a-zA-Z0-9 &]+)/i);
+  if (atMatch) merchant = atMatch[1].trim();
+
+  // detect income vs expense
   const isIncome =
     lower.includes("deposit") ||
     lower.includes("payroll") ||
     lower.includes("refund");
 
-  const signedAmount = isIncome
-    ? Math.abs(amount)
-    : -Math.abs(amount);
-
   return {
     merchant,
-    amount: signedAmount,
-    category: categorizeMerchant(merchant),
+    amount: isIncome ? amount : -amount,
     type: isIncome ? "income" : "expense",
-    date: date.toISOString()
+    category: categorizeMerchant(merchant),
+    date: new Date().toISOString()
   };
 }
 
