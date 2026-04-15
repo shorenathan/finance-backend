@@ -140,3 +140,43 @@ app.get("/test-gmail", async (req, res) => {
     res.status(500).json({ error: "Gmail fetch failed" });
   }
 });
+
+app.get("/fetch-emails", async (req, res) => {
+  try {
+    if (!req.session.tokens) {
+      return res.status(401).json({ error: "Not logged in" });
+    }
+
+    oauth2Client.setCredentials(req.session.tokens);
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+    const list = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 10
+    });
+
+    const messages = list.data.messages || [];
+
+    let results = [];
+
+    for (let msg of messages) {
+      const full = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id
+      });
+
+      const snippet = full.data.snippet || "";
+
+      results.push({
+        id: msg.id,
+        snippet
+      });
+    }
+
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Fetch failed" });
+  }
+});
