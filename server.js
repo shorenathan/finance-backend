@@ -150,7 +150,8 @@ app.get("/fetch-emails", async (req, res) => {
 
     const list = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 20
+      maxResults: 50,
+      q: "transaction"
     });
 
     const messages = list.data.messages || [];
