@@ -43,26 +43,12 @@ app.get("/", (req, res) => {
 });
 
 /* -----------------------------
-   TRANSACTIONS
+   AUTH STATUS
 ------------------------------*/
-app.get("/transactions", (req, res) => {
-  res.json(transactions);
-});
-
-app.post("/transactions", (req, res) => {
-  const { desc, amount } = req.body;
-
-  if (!desc || amount === undefined) {
-    return res.status(400).json({ error: "Invalid data" });
-  }
-
-  transactions.push({
-    id: Date.now(),
-    desc,
-    amount
+app.get("/auth/status", (req, res) => {
+  res.json({
+    loggedIn: !!req.session.tokens
   });
-
-  res.json({ success: true });
 });
 
 /* -----------------------------
@@ -98,45 +84,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   AUTH STATUS
-------------------------------*/
-app.get("/auth/status", (req, res) => {
-  res.json({
-    loggedIn: !!req.session.tokens
-  });
-});
-
-/* -----------------------------
-   TEST GMAIL
-------------------------------*/
-app.get("/test-gmail", async (req, res) => {
-  try {
-    if (!req.session.tokens) {
-      return res.status(401).json({ error: "Not logged in" });
-    }
-
-    oauth2Client.setCredentials(req.session.tokens);
-
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-    const response = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 5
-    });
-
-    res.json(response.data);
-
-  } catch (err) {
-    console.error("TEST GMAIL ERROR:", err);
-    res.status(500).json({
-      error: "Test Gmail failed",
-      message: err.message
-    });
-  }
-});
-
-/* -----------------------------
-   FETCH EMAILS (FIXED DECODER)
+   FETCH EMAILS (STRUCTURE DEBUG MODE)
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -158,24 +106,34 @@ app.get("/fetch-emails", async (req, res) => {
     let results = [];
 
     for (let msg of messages) {
-     try {
-       const full = await gmail.users.messages.get({
-         userId: "me",
-         id: msg.id
-       });
-   
-       const text = extractBody(full.data.payload);
-   
-       results.push({
-         id: msg.id,
-         decoded: text   // 
-       });
-   
-     } catch (innerErr) {
-       console.log("Skipping email:", msg.id, innerErr.message);
-       continue;
-     }
-   }
+      try {
+        const full = await gmail.users.messages.get({
+          userId: "me",
+          id: msg.id
+        });
+
+        const payload = full.data.payload;
+
+        results.push({
+          id: msg.id,
+
+          // Gmail metadata
+          snippet: full.data.snippet,
+          mimeType: payload?.mimeType || null,
+
+          // structure inspection
+          hasBody: !!payload?.body?.data,
+          hasParts: !!payload?.parts,
+
+          // decoded body (if any exists)
+          decoded: extractBody(payload)
+        });
+
+      } catch (innerErr) {
+        console.log("Skipping email:", msg.id, innerErr.message);
+        continue;
+      }
+    }
 
     res.json(results);
 
@@ -189,17 +147,17 @@ app.get("/fetch-emails", async (req, res) => {
 });
 
 /* -----------------------------
-   EMAIL BODY EXTRACTOR (FIX)
+   EMAIL BODY EXTRACTOR (DEBUG VERSION)
 ------------------------------*/
 function extractBody(payload) {
   let bodyData = "";
 
-  // Case 1: simple emails
+  // Case 1: simple email body
   if (payload?.body?.data) {
     bodyData = payload.body.data;
   }
 
-  // Case 2: multipart emails (MOST COMMON)
+  // Case 2: multipart emails (VERY COMMON)
   else if (payload?.parts) {
     for (const part of payload.parts) {
       if (part.mimeType === "text/plain" && part.body?.data) {
@@ -216,88 +174,6 @@ function extractBody(payload) {
   if (!bodyData) return "";
 
   return Buffer.from(bodyData, "base64").toString("utf-8");
-}
-
-/* -----------------------------
-   PARSER
-------------------------------*/
-function parseTransaction(text) {
-  const lower = text.toLowerCase();
-
-  const cleanText = text
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/=09/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ");
-
-  const amountMatch = cleanText.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
-  if (!amountMatch) return null;
-
-  const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
-
-  let merchant = "unknown";
-
-  const merchantMatch = cleanText.match(/merchant:\s*([^\n]+)/i);
-  if (merchantMatch) {
-    merchant = merchantMatch[1].trim();
-  }
-
-  const dateMatch = cleanText.match(/date:\s*([^\n]+)/i);
-  const date = dateMatch
-    ? new Date(dateMatch[1].trim())
-    : new Date();
-
-  const isIncome =
-    lower.includes("deposit") ||
-    lower.includes("payroll") ||
-    lower.includes("refund");
-
-  return {
-    merchant,
-    amount: isIncome ? amount : -amount,
-    type: isIncome ? "income" : "expense",
-    category: categorizeMerchant(merchant),
-    date: date.toISOString()
-  };
-}
-
-/* -----------------------------
-   CATEGORY ENGINE
-------------------------------*/
-function categorizeMerchant(merchant) {
-  const m = merchant.toLowerCase();
-  const clean = m.replace(/[^a-z0-9 ]/g, " ");
-
-  if (
-    clean.includes("gas") ||
-    clean.includes("fuel") ||
-    clean.includes("shell") ||
-    clean.includes("chevron") ||
-    clean.includes("exxon") ||
-    clean.includes("qt")
-  ) return "gas";
-
-  if (
-    clean.includes("uber") ||
-    clean.includes("lyft") ||
-    clean.includes("parking") ||
-    clean.includes("toll")
-  ) return "transport";
-
-  if (
-    clean.includes("amazon") ||
-    clean.includes("walmart") ||
-    clean.includes("target")
-  ) return "shopping";
-
-  if (
-    clean.includes("mcdonald") ||
-    clean.includes("starbucks") ||
-    clean.includes("restaurant") ||
-    clean.includes("food")
-  ) return "food";
-
-  return "other";
 }
 
 /* -----------------------------
