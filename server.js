@@ -136,7 +136,7 @@ app.get("/test-gmail", async (req, res) => {
 });
 
 /* -----------------------------
-   FETCH + PARSE EMAILS (FIXED)
+   FETCH EMAILS (FIXED DECODER)
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -158,24 +158,29 @@ app.get("/fetch-emails", async (req, res) => {
     let results = [];
 
     for (let msg of messages) {
-  try {
-    const full = await gmail.users.messages.get({
-      userId: "me",
-      id: msg.id
-    });
+      try {
+        const full = await gmail.users.messages.get({
+          userId: "me",
+          id: msg.id
+        });
 
-    results.push({
-      id: msg.id,
-      snippet: full.data.snippet,
-      payload: full.data.payload,   // 👈 FULL RAW STRUCTURE
-      raw: full.data
-    });
+        const text = extractBody(full.data.payload);
 
-  } catch (innerErr) {
-    console.log("Skipping email:", msg.id, innerErr.message);
-    continue;
-  }
-}
+        const parsed = parseTransaction(text);
+
+        if (parsed) {
+          results.push({
+            id: msg.id,
+            raw: text,
+            ...parsed
+          });
+        }
+
+      } catch (innerErr) {
+        console.log("Skipping email:", msg.id, innerErr.message);
+        continue;
+      }
+    }
 
     res.json(results);
 
@@ -187,6 +192,36 @@ app.get("/fetch-emails", async (req, res) => {
     });
   }
 });
+
+/* -----------------------------
+   EMAIL BODY EXTRACTOR (FIX)
+------------------------------*/
+function extractBody(payload) {
+  let bodyData = "";
+
+  // Case 1: simple emails
+  if (payload?.body?.data) {
+    bodyData = payload.body.data;
+  }
+
+  // Case 2: multipart emails (MOST COMMON)
+  else if (payload?.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        bodyData = part.body.data;
+        break;
+      }
+
+      if (part.mimeType === "text/html" && part.body?.data && !bodyData) {
+        bodyData = part.body.data;
+      }
+    }
+  }
+
+  if (!bodyData) return "";
+
+  return Buffer.from(bodyData, "base64").toString("utf-8");
+}
 
 /* -----------------------------
    PARSER
