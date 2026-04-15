@@ -22,11 +22,6 @@ app.use(session({
 }));
 
 /* -----------------------------
-   IN-MEMORY DATA
-------------------------------*/
-let transactions = [];
-
-/* -----------------------------
    OAUTH CLIENT
 ------------------------------*/
 const oauth2Client = new google.auth.OAuth2(
@@ -84,7 +79,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   FETCH EMAILS (TRANSACTION ENGINE)
+   RAW EMAIL INSPECTOR
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -98,7 +93,7 @@ app.get("/fetch-emails", async (req, res) => {
 
     const list = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 50
+      maxResults: 20 // keep small for debugging
     });
 
     const messages = list.data.messages || [];
@@ -109,30 +104,62 @@ app.get("/fetch-emails", async (req, res) => {
       try {
         const full = await gmail.users.messages.get({
           userId: "me",
-          id: msg.id
+          id: msg.id,
+          format: "full"
         });
 
-        const snippet = full.data.snippet || "";
+        const payload = full.data.payload;
 
-        const parsed = parseTransactionFromSnippet(snippet);
+        results.push({
+          id: msg.id,
 
-        if (parsed) {
-          results.push({
-            id: msg.id,
-            ...parsed
-          });
-        }
+          /* -------------------------
+             META INFO
+          -------------------------*/
+          snippet: full.data.snippet,
+          historyId: full.data.historyId,
+          internalDate: full.data.internalDate,
+
+          /* -------------------------
+             HEADERS (SUBJECT, FROM, ETC)
+          -------------------------*/
+          headers: payload?.headers || [],
+
+          /* -------------------------
+             MIME STRUCTURE
+          -------------------------*/
+          mimeType: payload?.mimeType || null,
+
+          /* -------------------------
+             RAW BODY (BASE64)
+          -------------------------*/
+          rawBody: payload?.body || null,
+
+          /* -------------------------
+             FULL PAYLOAD (DEBUG GOLD)
+          -------------------------*/
+          payload: payload,
+
+          /* -------------------------
+             DECODED BODY (BEST EFFORT)
+          -------------------------*/
+          decodedBody: extractFullBody(payload),
+
+          /* -------------------------
+             MULTIPART STRUCTURE
+          -------------------------*/
+          parts: payload?.parts || null
+        });
 
       } catch (err) {
-        console.log("Skipping email:", msg.id, err.message);
-        continue;
+        console.log("Skipping:", msg.id, err.message);
       }
     }
 
     res.json(results);
 
   } catch (err) {
-    console.error("FETCH EMAILS ERROR:", err);
+    console.error("RAW FETCH ERROR:", err);
     res.status(500).json({
       error: "Fetch failed",
       message: err.message
@@ -141,77 +168,41 @@ app.get("/fetch-emails", async (req, res) => {
 });
 
 /* -----------------------------
-   SNIPPET TRANSACTION PARSER
+   FULL BODY EXTRACTOR
 ------------------------------*/
-function parseTransactionFromSnippet(snippet) {
-  const text = snippet.replace(/\s+/g, " ").trim();
+function extractFullBody(payload) {
+  let data = "";
 
-  // Must have an amount
-  const amountMatch = text.match(/\$([\d,]+(\.\d{1,2})?)/);
-  if (!amountMatch) return null;
-
-  const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
-
-  // Merchant extraction (handles inline format)
-  let merchant = "unknown";
-
-  const merchantMatch =
-    text.match(/merchant:\s*(.+?)\sdate:/i) ||
-    text.match(/merchant:\s*(.+?)\samount:/i);
-
-  if (merchantMatch) {
-    merchant = merchantMatch[1].trim();
+  // direct body
+  if (payload?.body?.data) {
+    data = payload.body.data;
   }
 
-  // Date extraction
-  const dateMatch = text.match(/date:\s*([a-z0-9, ]+)/i);
-  const date = dateMatch ? new Date(dateMatch[1]) : new Date();
+  // multipart traversal
+  else if (payload?.parts) {
+    const stack = [...payload.parts];
 
-  return {
-    merchant,
-    amount: -Math.abs(amount), // default expense
-    type: "expense",
-    category: categorizeMerchant(merchant),
-    date: date.toISOString()
-  };
-}
+    while (stack.length) {
+      const part = stack.pop();
 
-/* -----------------------------
-   CATEGORY ENGINE
-------------------------------*/
-function categorizeMerchant(merchant) {
-  const m = merchant.toLowerCase();
+      if (part?.body?.data) {
+        data = part.body.data;
+        break;
+      }
 
-  if (
-    m.includes("gas") ||
-    m.includes("fuel") ||
-    m.includes("shell") ||
-    m.includes("chevron") ||
-    m.includes("exxon") ||
-    m.includes("qt")
-  ) return "gas";
+      if (part?.parts) {
+        stack.push(...part.parts);
+      }
+    }
+  }
 
-  if (
-    m.includes("uber") ||
-    m.includes("lyft") ||
-    m.includes("parking") ||
-    m.includes("toll")
-  ) return "transport";
+  if (!data) return "";
 
-  if (
-    m.includes("amazon") ||
-    m.includes("walmart") ||
-    m.includes("target")
-  ) return "shopping";
-
-  if (
-    m.includes("mcdonald") ||
-    m.includes("starbucks") ||
-    m.includes("restaurant") ||
-    m.includes("food")
-  ) return "food";
-
-  return "other";
+  try {
+    return Buffer.from(data, "base64").toString("utf-8");
+  } catch {
+    return data;
+  }
 }
 
 /* -----------------------------
