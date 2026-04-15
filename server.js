@@ -153,7 +153,7 @@ app.get("/fetch-emails", async (req, res) => {
 
     const list = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 10
+      maxResults: 20
     });
 
     const messages = list.data.messages || [];
@@ -166,17 +166,102 @@ app.get("/fetch-emails", async (req, res) => {
         id: msg.id
       });
 
-      const snippet = full.data.snippet || "";
+      const text = full.data.snippet || "";
 
-      results.push({
-        id: msg.id,
-        snippet
-      });
+      const parsed = parseTransaction(text);
+
+      if (parsed) {
+        results.push({
+          id: msg.id,
+          ...parsed,
+          raw: text
+        });
+      }
     }
 
     res.json(results);
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Fetch failed" });
   }
 });
+
+function parseTransaction(text) {
+  const lower = text.toLowerCase();
+
+  // Only process transaction emails
+  if (!lower.includes("transaction alert")) {
+    return null;
+  }
+
+  // Extract fields using regex
+  const merchantMatch = text.match(/merchant:\s*(.*)/i);
+  const dateMatch = text.match(/date:\s*(.*)/i);
+  const amountMatch = text.match(/amount:\s*\$?([0-9]+(\.[0-9]{1,2})?)/i);
+
+  if (!merchantMatch || !amountMatch) {
+    return null;
+  }
+
+  const merchant = merchantMatch[1].trim();
+
+  const amount = parseFloat(amountMatch[1]);
+
+  const date = dateMatch ? new Date(dateMatch[1].trim()) : new Date();
+
+  return {
+    merchant,
+    amount: -Math.abs(amount), // credit card = always expense
+    category: categorizeMerchant(merchant),
+    type: "expense",
+    date: date.toISOString()
+  };
+}
+
+function categorizeMerchant(merchant) {
+  const m = merchant.toLowerCase();
+
+  // normalize noise
+  const clean = m.replace(/[^a-z0-9 ]/g, " ");
+
+  // GAS category (important upgrade)
+  if (
+    clean.includes("gas") ||
+    clean.includes("fuel") ||
+    clean.includes("shell") ||
+    clean.includes("chevron") ||
+    clean.includes("exxon") ||
+    clean.includes("qt")
+  ) {
+    return "gas";
+  }
+
+  if (
+    clean.includes("uber") ||
+    clean.includes("lyft") ||
+    clean.includes("parking") ||
+    clean.includes("toll")
+  ) {
+    return "transport";
+  }
+
+  if (
+    clean.includes("amazon") ||
+    clean.includes("walmart") ||
+    clean.includes("target")
+  ) {
+    return "shopping";
+  }
+
+  if (
+    clean.includes("mcdonald") ||
+    clean.includes("starbucks") ||
+    clean.includes("restaurant") ||
+    clean.includes("food")
+  ) {
+    return "food";
+  }
+
+  return "other";
+}
