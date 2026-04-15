@@ -164,7 +164,19 @@ app.get("/fetch-emails", async (req, res) => {
           id: msg.id
         });
 
-        const text = full.data.snippet || "";
+        /* -----------------------------
+           FIX #1 + #2: REAL EMAIL BODY EXTRACTION
+        ------------------------------*/
+        const payload = full.data.payload;
+
+        let text = "";
+
+        if (payload?.body?.data) {
+          text = Buffer.from(payload.body.data, "base64").toString("utf-8");
+        } else if (full.data.snippet) {
+          text = full.data.snippet;
+        }
+
         const parsed = parseTransaction(text);
 
         if (parsed) {
@@ -198,20 +210,17 @@ app.get("/fetch-emails", async (req, res) => {
 function parseTransaction(text) {
   const lower = text.toLowerCase();
 
-  // normalize HTML + weird Gmail encoding
   const cleanText = text
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/=09/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ");
 
-  // extract amount (safe)
   const amountMatch = cleanText.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
   if (!amountMatch) return null;
 
   const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
 
-  // extract merchant (NOW LINE BASED = MUCH MORE RELIABLE)
   let merchant = "unknown";
 
   const merchantMatch = cleanText.match(/merchant:\s*([^\n]+)/i);
@@ -219,13 +228,11 @@ function parseTransaction(text) {
     merchant = merchantMatch[1].trim();
   }
 
-  // extract date safely
   const dateMatch = cleanText.match(/date:\s*([^\n]+)/i);
   const date = dateMatch
     ? new Date(dateMatch[1].trim())
     : new Date();
 
-  // income detection
   const isIncome =
     lower.includes("deposit") ||
     lower.includes("payroll") ||
