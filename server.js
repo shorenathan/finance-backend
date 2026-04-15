@@ -79,7 +79,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   RAW EMAIL INSPECTOR
+   FETCH EMAILS (FIXED PIPELINE)
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -93,7 +93,7 @@ app.get("/fetch-emails", async (req, res) => {
 
     const list = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 20 // keep small for debugging
+      maxResults: 50
     });
 
     const messages = list.data.messages || [];
@@ -108,48 +108,20 @@ app.get("/fetch-emails", async (req, res) => {
           format: "full"
         });
 
-        const payload = full.data.payload;
+        const snippet = full.data.snippet || "";
+        const body = extractFullBody(full.data.payload);
 
-        results.push({
-          id: msg.id,
+        // choose best source
+        const sourceText = body && body.length > 20 ? body : snippet;
 
-          /* -------------------------
-             META INFO
-          -------------------------*/
-          snippet: full.data.snippet,
-          historyId: full.data.historyId,
-          internalDate: full.data.internalDate,
+        const parsed = parseTransaction(sourceText);
 
-          /* -------------------------
-             HEADERS (SUBJECT, FROM, ETC)
-          -------------------------*/
-          headers: payload?.headers || [],
-
-          /* -------------------------
-             MIME STRUCTURE
-          -------------------------*/
-          mimeType: payload?.mimeType || null,
-
-          /* -------------------------
-             RAW BODY (BASE64)
-          -------------------------*/
-          rawBody: payload?.body || null,
-
-          /* -------------------------
-             FULL PAYLOAD (DEBUG GOLD)
-          -------------------------*/
-          payload: payload,
-
-          /* -------------------------
-             DECODED BODY (BEST EFFORT)
-          -------------------------*/
-          decodedBody: extractFullBody(payload),
-
-          /* -------------------------
-             MULTIPART STRUCTURE
-          -------------------------*/
-          parts: payload?.parts || null
-        });
+        if (parsed) {
+          results.push({
+            id: msg.id,
+            ...parsed
+          });
+        }
 
       } catch (err) {
         console.log("Skipping:", msg.id, err.message);
@@ -159,7 +131,7 @@ app.get("/fetch-emails", async (req, res) => {
     res.json(results);
 
   } catch (err) {
-    console.error("RAW FETCH ERROR:", err);
+    console.error("FETCH EMAILS ERROR:", err);
     res.status(500).json({
       error: "Fetch failed",
       message: err.message
@@ -168,17 +140,15 @@ app.get("/fetch-emails", async (req, res) => {
 });
 
 /* -----------------------------
-   FULL BODY EXTRACTOR
+   BODY EXTRACTOR
 ------------------------------*/
 function extractFullBody(payload) {
   let data = "";
 
-  // direct body
   if (payload?.body?.data) {
     data = payload.body.data;
   }
 
-  // multipart traversal
   else if (payload?.parts) {
     const stack = [...payload.parts];
 
@@ -203,6 +173,86 @@ function extractFullBody(payload) {
   } catch {
     return data;
   }
+}
+
+/* -----------------------------
+   TRANSACTION PARSER (FIXED CLEANING)
+------------------------------*/
+function parseTransaction(text) {
+  if (!text) return null;
+
+  // CLEAN HTML + ENCODINGS
+  let clean = text
+    .replace(/\\u003Cbr\\u003E/g, "\n")
+    .replace(/\\u003cbr\\s*\/?\\u003e/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ")
+    .replace(/\s+/g, " ");
+
+  // MUST HAVE AMOUNT
+  const amountMatch = clean.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
+  if (!amountMatch) return null;
+
+  const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
+
+  // MERCHANT
+  let merchant = "unknown";
+
+  const merchantMatch = clean.match(/merchant:\s*(.+?)\sdate:/i);
+  if (merchantMatch) {
+    merchant = merchantMatch[1].trim();
+  }
+
+  // DATE
+  const dateMatch = clean.match(/date:\s*([a-z0-9, ]+)/i);
+  const date = dateMatch ? new Date(dateMatch[1]) : new Date();
+
+  return {
+    merchant,
+    amount: -Math.abs(amount),
+    type: "expense",
+    category: categorizeMerchant(merchant),
+    date: date.toISOString()
+  };
+}
+
+/* -----------------------------
+   CATEGORY ENGINE
+------------------------------*/
+function categorizeMerchant(merchant) {
+  const m = merchant.toLowerCase();
+
+  if (
+    m.includes("gas") ||
+    m.includes("fuel") ||
+    m.includes("shell") ||
+    m.includes("chevron") ||
+    m.includes("exxon") ||
+    m.includes("qt")
+  ) return "gas";
+
+  if (
+    m.includes("uber") ||
+    m.includes("lyft") ||
+    m.includes("parking") ||
+    m.includes("toll")
+  ) return "transport";
+
+  if (
+    m.includes("amazon") ||
+    m.includes("walmart") ||
+    m.includes("target")
+  ) return "shopping";
+
+  if (
+    m.includes("mcdonald") ||
+    m.includes("starbucks") ||
+    m.includes("restaurant") ||
+    m.includes("food")
+  ) return "food";
+
+  return "other";
 }
 
 /* -----------------------------
