@@ -22,7 +22,7 @@ app.use(session({
 }));
 
 /* -----------------------------
-   IN-MEMORY DATA (MVP ONLY)
+   IN-MEMORY DATA
 ------------------------------*/
 let transactions = [];
 
@@ -43,7 +43,7 @@ app.get("/", (req, res) => {
 });
 
 /* -----------------------------
-   TRANSACTIONS (manual test)
+   TRANSACTIONS
 ------------------------------*/
 app.get("/transactions", (req, res) => {
   res.json(transactions);
@@ -66,7 +66,7 @@ app.post("/transactions", (req, res) => {
 });
 
 /* -----------------------------
-   GOOGLE LOGIN
+   GOOGLE AUTH
 ------------------------------*/
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
@@ -81,9 +81,6 @@ app.get("/auth/google", (req, res) => {
   res.redirect(url);
 });
 
-/* -----------------------------
-   GOOGLE CALLBACK
-------------------------------*/
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const { code } = req.query;
@@ -101,7 +98,7 @@ app.get("/auth/google/callback", async (req, res) => {
 });
 
 /* -----------------------------
-   AUTH STATUS DEBUG
+   AUTH STATUS
 ------------------------------*/
 app.get("/auth/status", (req, res) => {
   res.json({
@@ -110,7 +107,7 @@ app.get("/auth/status", (req, res) => {
 });
 
 /* -----------------------------
-   TEST GMAIL ACCESS
+   TEST GMAIL
 ------------------------------*/
 app.get("/test-gmail", async (req, res) => {
   try {
@@ -139,7 +136,7 @@ app.get("/test-gmail", async (req, res) => {
 });
 
 /* -----------------------------
-   FETCH + PARSE EMAILS
+   FETCH + PARSE EMAILS (FIXED)
 ------------------------------*/
 app.get("/fetch-emails", async (req, res) => {
   try {
@@ -161,39 +158,46 @@ app.get("/fetch-emails", async (req, res) => {
     let results = [];
 
     for (let msg of messages) {
-      const full = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id
-      });
-
-      const text = full.data.snippet || "";
-
-      const parsed = parseTransaction(text);
-
-      if (parsed) {
-        results.push({
-          id: msg.id,
-          raw: text,
-          ...parsed
+      try {
+        const full = await gmail.users.messages.get({
+          userId: "me",
+          id: msg.id
         });
+
+        const text = full.data.snippet || "";
+        const parsed = parseTransaction(text);
+
+        if (parsed) {
+          results.push({
+            id: msg.id,
+            raw: text,
+            ...parsed
+          });
+        }
+
+      } catch (innerErr) {
+        console.log("Skipping email:", msg.id, innerErr.message);
+        continue;
       }
     }
 
     res.json(results);
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Fetch failed" });
+    console.error("FETCH EMAILS ERROR:", err);
+    res.status(500).json({
+      error: "Fetch failed",
+      message: err.message
+    });
   }
 });
 
 /* -----------------------------
-   TRANSACTION PARSER
+   PARSER
 ------------------------------*/
 function parseTransaction(text) {
   const lower = text.toLowerCase();
 
-  // better filtering (broader coverage)
   const isTransactionEmail =
     lower.includes("transaction") ||
     lower.includes("alert") ||
@@ -210,9 +214,7 @@ function parseTransaction(text) {
   if (!merchantMatch || !amountMatch) return null;
 
   const merchant = merchantMatch[1].trim();
-
   const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
-
   const date = dateMatch ? new Date(dateMatch[1].trim()) : new Date();
 
   const isIncome =
@@ -247,41 +249,33 @@ function categorizeMerchant(merchant) {
     clean.includes("chevron") ||
     clean.includes("exxon") ||
     clean.includes("qt")
-  ) {
-    return "gas";
-  }
+  ) return "gas";
 
   if (
     clean.includes("uber") ||
     clean.includes("lyft") ||
     clean.includes("parking") ||
     clean.includes("toll")
-  ) {
-    return "transport";
-  }
+  ) return "transport";
 
   if (
     clean.includes("amazon") ||
     clean.includes("walmart") ||
     clean.includes("target")
-  ) {
-    return "shopping";
-  }
+  ) return "shopping";
 
   if (
     clean.includes("mcdonald") ||
     clean.includes("starbucks") ||
     clean.includes("restaurant") ||
     clean.includes("food")
-  ) {
-    return "food";
-  }
+  ) return "food";
 
   return "other";
 }
 
 /* -----------------------------
-   START SERVER (MUST BE LAST)
+   START SERVER
 ------------------------------*/
 const PORT = process.env.PORT || 3000;
 
