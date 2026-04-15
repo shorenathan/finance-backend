@@ -181,39 +181,49 @@ function extractFullBody(payload) {
 function parseTransaction(text) {
   if (!text) return null;
 
-  // CLEAN HTML + ENCODINGS
-  let clean = text
+  // STEP 1: normalize EVERYTHING
+  const clean = text
     .replace(/\\u003Cbr\\u003E/g, "\n")
     .replace(/\\u003cbr\\s*\/?\\u003e/gi, "\n")
     .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/=09/g, "")
     .replace(/\r/g, "")
-    .replace(/\t/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/\t/g, " ");
 
-  // MUST HAVE AMOUNT
-  const amountMatch = clean.match(/amount:\s*\$?([\d,]+(\.\d{1,2})?)/i);
-  if (!amountMatch) return null;
+  // STEP 2: split into lines
+  const lines = clean.split("\n").map(l => l.trim());
 
-  const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
+  let merchant = null;
+  let amount = null;
+  let date = null;
 
-  // MERCHANT
-  let merchant = "unknown";
+  for (let line of lines) {
+    const lower = line.toLowerCase();
 
-  const merchantMatch = clean.match(/merchant:\s*(.+?)\sdate:/i);
-  if (merchantMatch) {
-    merchant = merchantMatch[1].trim();
+    if (lower.startsWith("merchant:")) {
+      merchant = line.split(":")[1]?.trim();
+    }
+
+    if (lower.startsWith("amount:")) {
+      const match = line.match(/\$?([\d,]+(\.\d{1,2})?)/);
+      if (match) amount = parseFloat(match[1].replace(/,/g, ""));
+    }
+
+    if (lower.startsWith("date:")) {
+      const value = line.split(":")[1]?.trim();
+      date = value ? new Date(value) : new Date();
+    }
   }
 
-  // DATE
-  const dateMatch = clean.match(/date:\s*([a-z0-9, ]+)/i);
-  const date = dateMatch ? new Date(dateMatch[1]) : new Date();
+  // MUST HAVE at least amount + merchant
+  if (!amount || !merchant) return null;
 
   return {
     merchant,
     amount: -Math.abs(amount),
     type: "expense",
     category: categorizeMerchant(merchant),
-    date: date.toISOString()
+    date: (date || new Date()).toISOString()
   };
 }
 
