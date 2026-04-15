@@ -158,29 +158,24 @@ app.get("/fetch-emails", async (req, res) => {
     let results = [];
 
     for (let msg of messages) {
-      try {
-        const full = await gmail.users.messages.get({
-          userId: "me",
-          id: msg.id
-        });
-
-        const text = extractBody(full.data.payload);
-
-        const parsed = parseTransaction(text);
-
-        if (parsed) {
-          results.push({
-            id: msg.id,
-            raw: text,
-            ...parsed
-          });
-        }
-
-      } catch (innerErr) {
-        console.log("Skipping email:", msg.id, innerErr.message);
-        continue;
-      }
-    }
+     try {
+       const full = await gmail.users.messages.get({
+         userId: "me",
+         id: msg.id
+       });
+   
+       const text = extractBody(full.data.payload);
+   
+       results.push({
+         id: msg.id,
+         decoded: text   // 
+       });
+   
+     } catch (innerErr) {
+       console.log("Skipping email:", msg.id, innerErr.message);
+       continue;
+     }
+   }
 
     res.json(results);
 
