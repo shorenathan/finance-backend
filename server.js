@@ -128,14 +128,14 @@ app.get("/test-gmail", async (req, res) => {
     });
 
     res.json(response.data);
+
   } catch (err) {
-  console.error("FETCH EMAILS ERROR:", err);
-  res.status(500).json({
-    error: "Fetch failed",
-    details: err.message,
-    stack: err.stack
-  });
-}
+    console.error("TEST GMAIL ERROR:", err);
+    res.status(500).json({
+      error: "Test Gmail failed",
+      message: err.message
+    });
+  }
 });
 
 /* -----------------------------
